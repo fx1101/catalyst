@@ -3,8 +3,10 @@ import json
 import os
 import re
 from collections import defaultdict
+import asyncio
 
-import ccxt
+from ccxt import async_support as ccxt
+#import ccxt
 import pandas as pd
 import six
 from ccxt import InvalidOrder, NetworkError, \
@@ -40,10 +42,10 @@ SUPPORTED_EXCHANGES = dict(
     bittrex=ccxt.bittrex,
     poloniex=ccxt.poloniex,
     bitmex=ccxt.bitmex,
-    gdax=ccxt.gdax,
+    #gdax=ccxt.gdax,
     huobipro=ccxt.huobipro,
     okex=ccxt.okex,
-    hitbtc=ccxt.hitbtc2,
+    #hitbtc=ccxt.hitbtc2,
     kucoin=ccxt.kucoin,
 )
 
@@ -115,28 +117,48 @@ class CCXT(Exchange):
                 log.debug('loaded markets for {}'.format(self.name))
 
         if self.markets is None:
-            try:
-                markets_symbols = self.api.load_markets()
-                log.debug(
-                    'fetching {} markets:\n{}'.format(
-                        self.name, markets_symbols
-                    )
-                )
+            self.api.asyncioLoop.run_until_complete(self.load_mkts_sym(self.markets, filename))
+            #self.load_mkts_sym(self.markets, filename)
+            #try:
+            #    markets_symbols = self.api.load_markets()
+            #    log.debug(
+            #        'fetching {} markets:\n{}'.format(
+            #            self.name, markets_symbols
+            #        )
+            #    )
 
-                self.markets = self.api.fetch_markets()
-                with open(filename, 'w+') as f:
-                    json.dump(self.markets, f, indent=4)
+            #    self.markets = self.api.fetch_markets()
+            #    with open(filename, 'w+') as f:
+            #        json.dump(self.markets, f, indent=4)
 
-            except (ExchangeError, NetworkError) as e:
-                log.warn(
-                    'unable to fetch markets {}: {}'.format(
-                        self.name, e
-                    )
-                )
-                raise ExchangeRequestError(error=e)
+            #except (ExchangeError, NetworkError) as e:
+            #    log.warn(
+            #        'unable to fetch markets {}: {}'.format(
+            #            self.name, e
+            #        )
+            #    )
+            #    raise ExchangeRequestError(error=e)
 
         self.load_assets()
         self._is_init = True
+
+    async def load_mkts_sym(self, symbols, filename):
+    #def load_mkts_sym(self, symbols, filename):
+        try:
+            symbols = await self.api.load_markets()
+            #symbols = self.api.load_markets()
+            log.debug('fetching {} markets:\n{}'.format(
+                      self.name, symbols))
+
+            self.markets = await self.api.fetch_markets()
+            #mkts = self.api.fetch_markets()
+            with open(filename, 'w+') as f:
+                json.dump(self.markets, f, indent=4)
+
+        except (ExchangeError, NetworkError) as e:
+            log.warn('unable to fetch markets {}: {}'.format(self.name, e))
+            raise ExchangeRequestError(error=e)
+
 
     @staticmethod
     def find_exchanges(features=None, is_authenticated=False):
@@ -314,12 +336,12 @@ class CCXT(Exchange):
         Notes
         -----
         The Pandas offset aliases supported by Catalyst:
-        Alias	Description
-        W	weekly frequency
-        M	month end frequency
-        D	calendar day frequency
-        H	hourly frequency
-        T, min	minutely frequency
+        Alias   Description
+        W       weekly frequency
+        M       month end frequency
+        D       calendar day frequency
+        H       hourly frequency
+        T, min  minutely frequency
 
         The CCXT timeframes:
         '1m': '1minute',
@@ -420,6 +442,17 @@ class CCXT(Exchange):
             timeframe, source='ccxt', raise_error=raise_error
         )
 
+    async def get_ohlcvs(ohlcvs,
+                         sym,
+                         timeframe,
+                         since,
+                         bar_count):
+       ohlcvs = await self.api.fetch_ohlcv(symbol=sym,
+                                           timeframe=timeframe,
+                                           since=since,
+                                           limit=bar_count,
+                                           params={})
+
     def get_candles(self, freq, assets, bar_count=1, start_dt=None,
                     end_dt=None):
         is_single = (isinstance(assets, TradingPair))
@@ -459,13 +492,18 @@ class CCXT(Exchange):
         candles = dict()
         for index, asset in enumerate(assets):
             try:
-                ohlcvs = self.api.fetch_ohlcv(
-                    symbol=symbols[index],
-                    timeframe=timeframe,
-                    since=since,
-                    limit=bar_count,
-                    params={}
-                )
+                #ohlcvs = self.api.fetch_ohlcv(
+                #    symbol=symbols[index],
+                #    timeframe=timeframe,
+                #    since=since,
+                #    limit=bar_count,
+                #    params={}
+                #)
+                self.api.asyncioLoop.run_until_complete(self.get_ohlcv(ohlcvs,
+                                                                       symbols[index],
+                                                                       timeframe,
+                                                                       since,
+                                                                       bar_count))
             except (ExchangeError, NetworkError) as e:
                 log.warn(
                     'unable to fetch {} ohlcv: {}'.format(
@@ -579,7 +617,8 @@ class CCXT(Exchange):
         params = dict(
             exchange=self.name,
             data_source=data_source,
-            exchange_symbol=market['id'],
+            #exchange_symbol=market['id'],
+            exchange_symbol=market['symbol'],
         )
         mixin_market_params(self.name, params, market)
 
@@ -610,12 +649,16 @@ class CCXT(Exchange):
             params['symbol'] = get_catalyst_symbol(market)
             # TODO: add as an optional column
             params['leverage'] = 1.0
-
+        #print(params)
+        if params['trading_state'] is None:
+            params['trading_state'] = True
         return TradingPair(**params)
 
     def load_assets(self):
         log.debug('loading assets for {}'.format(self.name))
         self.assets = []
+
+        #print(self.markets)
 
         for market in self.markets:
             if 'id' not in market:
@@ -642,10 +685,10 @@ class CCXT(Exchange):
                 asset = self.create_trading_pair(market=market)
                 self.assets.append(asset)
 
-    def get_balances(self):
+    async def get_balances(self):
         try:
             log.debug('retrieving wallets balances')
-            balances = self.api.fetch_balance()
+            balances = await self.api.fetch_balance()
 
             balances_lower = dict()
             for key in balances:
@@ -789,7 +832,7 @@ class CCXT(Exchange):
 
         return None
 
-    def _fetch_missing_order(self, dt_before, symbol):
+    async def _fetch_missing_order(self, dt_before, symbol):
         """
         check if order was created by running through
         all api functions according to ccxt manual
@@ -807,23 +850,23 @@ class CCXT(Exchange):
             # contains all orders, therefore,
             # if method available for this exchange,
             # it's enough to check it.
-            self.api.fetch_orders()
+            await self.api.fetch_orders()
             missing_order = self._check_order_found(previous_orders)
 
         else:
             if 'fetchOpenOrders' in self.api.has and \
                     self.api.has['fetchOpenOrders'] is True:
-                self.api.fetch_open_orders()
+                await self.api.fetch_open_orders()
                 missing_order = self._check_order_found(previous_orders)
 
             if missing_order is None and \
                     'fetchClosedOrders' in self.api.has and \
                     self.api.has['fetchClosedOrders'] is True:
-                self.api.fetch_closed_orders()
+                await self.api.fetch_closed_orders()
                 missing_order = self._check_order_found(previous_orders)
 
         if missing_order is None and self.api.has['fetchMyTrades']:
-            recent_trades = [x for x in self.api.fetch_my_trades(symbol=symbol)
+            recent_trades = [x for x in await self.api.fetch_my_trades(symbol=symbol)
                              if pd.Timestamp(x['datetime']) > dt_before
                              ]
             missing_order_id_by_trade = list(set(
@@ -845,6 +888,10 @@ class CCXT(Exchange):
 
         return None, missing_order
 
+    async def _run_fetch_missing_order(self, missing_order_id, missing_order, dt_before, symbol):
+        missing_order_id, missing_order = self._fetch_missing_order(
+            dt_before=dt_before, symbol=symbol)
+
     def _handle_request_timeout(self, dt_before, asset, amount, is_buy, style,
                                 prec_amount):
         """
@@ -862,8 +909,9 @@ class CCXT(Exchange):
         :return: missing_order: Order/ None
         """
         symbol = asset.asset_name.replace(' ', '')
-        missing_order_id, missing_order = self._fetch_missing_order(
-            dt_before=dt_before, symbol=symbol)
+        #missing_order_id, missing_order = self._fetch_missing_order(
+            #dt_before=dt_before, symbol=symbol)
+        self.api.asyncioLoop.run_until_complete(_run_fetch_missing_order(missing_order_id, missing_order, dt_before, symbol))
 
         if missing_order_id:
             final_amount = prec_amount if amount > 0 else -prec_amount
@@ -877,7 +925,7 @@ class CCXT(Exchange):
             )
         return missing_order
 
-    def create_order(self, asset, amount, is_buy, style):
+    async def create_order(self, asset, amount, is_buy, style):
         symbol = self.get_symbol(asset)
 
         if isinstance(style, ExchangeLimitOrder):
@@ -898,7 +946,7 @@ class CCXT(Exchange):
         if hasattr(self.api, 'amount_to_lots'):
             # TODO: is this right?
             if self.api.markets is None:
-                self.api.load_markets()
+                await self.api.load_markets()
 
             # https://github.com/ccxt/ccxt/issues/1483
             market = self.api.markets[symbol]
@@ -913,7 +961,7 @@ class CCXT(Exchange):
         prec_amount = self.api.amount_to_precision(symbol, adj_amount)
         before_order_dt = pd.Timestamp.utcnow()
         try:
-            result = self.api.create_order(
+            result = await self.api.create_order(
                 symbol=symbol,
                 type=order_type,
                 side=side,
@@ -992,10 +1040,10 @@ class CCXT(Exchange):
         )
         return order
 
-    def get_open_orders(self, asset):
+    async def get_open_orders(self, asset):
         try:
             symbol = self.get_symbol(asset)
-            result = self.api.fetch_open_orders(
+            result = await self.api.fetch_open_orders(
                 symbol=symbol,
                 since=None,
                 limit=None,
@@ -1077,13 +1125,13 @@ class CCXT(Exchange):
 
         return transactions
 
-    def process_order(self, order):
+    async def process_order(self, order):
         # TODO: move to parent class after tracking features in the parent
         if not self.api.has['fetchMyTrades']:
             return self._process_order_fallback(order)
 
         try:
-            all_trades = self.get_trades(order.asset)
+            all_trades = await self.get_trades(order.asset)
         except RequestTimeout as e:
             raise ExchangeRequestError(error="Received timeout from exchange")
         except ExchangeRequestError as e:
@@ -1151,8 +1199,8 @@ class CCXT(Exchange):
         order.broker_order_id = ', '.join([t['id'] for t in trades])
         return transactions
 
-    def get_order(self, order_id, asset_or_symbol=None,
-                  return_price=False, params={}):
+    async def get_order(self, order_id, asset_or_symbol=None,
+                        return_price=False, params={}):
         """Lookup an order based on the order id returned from one of the
         order functions.
 
@@ -1182,9 +1230,9 @@ class CCXT(Exchange):
         try:
             symbol = self.get_symbol(asset_or_symbol) \
                 if asset_or_symbol is not None else None
-            order_status = self.api.fetch_order(id=order_id,
-                                                symbol=symbol,
-                                                params=params)
+            order_status = await self.api.fetch_order(id=order_id,
+                                                      symbol=symbol,
+                                                      params=params)
             order, executed_price = self._create_order(order_status)
 
             if return_price:
@@ -1214,8 +1262,8 @@ class CCXT(Exchange):
         try:
             symbol = self.get_symbol(asset_or_symbol) \
                 if asset_or_symbol is not None else None
-            self.api.cancel_order(id=order_id,
-                                  symbol=symbol, params=params)
+            self.api.asyncioLoop.run_until_complete(self.api.cancel_order(id=order_id,
+                                                    symbol=symbol, params=params))
 
         except (ExchangeError, NetworkError) as e:
             log.warn(
@@ -1225,7 +1273,7 @@ class CCXT(Exchange):
             )
             raise ExchangeRequestError(error=e)
 
-    def tickers(self, assets, on_ticker_error='raise'):
+    async def tickers(self, assets, on_ticker_error='raise'):
         """
         Retrieve current tick data for the given assets
 
@@ -1244,7 +1292,7 @@ class CCXT(Exchange):
                 for asset in assets:
                     symbol = self.get_symbol(asset)
                     log.debug('fetching single ticker: {}'.format(symbol))
-                    results[symbol] = self.api.fetch_ticker(symbol=symbol)
+                    results[symbol] = await self.api.fetch_ticker(symbol=symbol)
 
             except (ExchangeError, NetworkError,) as e:
                 log.warn(
@@ -1258,7 +1306,7 @@ class CCXT(Exchange):
             symbols = self.get_symbols(assets)
             try:
                 log.debug('fetching multiple tickers: {}'.format(symbols))
-                results = self.api.fetch_tickers(symbols=symbols)
+                results = await self.api.fetch_tickers(symbols=symbols)
 
             except (ExchangeError, NetworkError) as e:
                 log.warn(
@@ -1309,10 +1357,10 @@ class CCXT(Exchange):
     def get_account(self):
         return None
 
-    def get_orderbook(self, asset, order_type='all', limit=None):
+    async def get_orderbook(self, asset, order_type='all', limit=None):
         ccxt_symbol = self.get_symbol(asset)
 
-        order_book = self.api.fetch_order_book(ccxt_symbol, limit=limit)
+        order_book = await self.api.fetch_order_book(ccxt_symbol, limit=limit)
 
         order_types = ['bids', 'asks'] if order_type == 'all' else [order_type]
         result = dict(last_traded=from_ms_timestamp(order_book['timestamp']))
@@ -1330,7 +1378,7 @@ class CCXT(Exchange):
 
         return result
 
-    def get_trades(self, asset, my_trades=True, start_dt=None, limit=100):
+    async def get_trades(self, asset, my_trades=True, start_dt=None, limit=100):
         if not my_trades:
             raise NotImplemented(
                 'get_trades only supports "my trades"'
@@ -1339,7 +1387,7 @@ class CCXT(Exchange):
         # TODO: is it possible to sort this? Limit is useless otherwise.
         ccxt_symbol = self.get_symbol(asset)
         try:
-            trades = self.api.fetch_my_trades(
+            trades = await self.api.fetch_my_trades(
                 symbol=ccxt_symbol,
                 since=start_dt,
                 limit=limit,

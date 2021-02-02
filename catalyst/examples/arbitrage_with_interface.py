@@ -11,6 +11,9 @@ from catalyst.utils.run_algo import run_algorithm
 algo_namespace = 'arbitrage_eth_btc'
 log = Logger(algo_namespace)
 
+async def get_exit_balances(exit_balances, exchange):
+    exit_balances = await exchange.get_balances()
+
 
 def initialize(context):
     log.info('initializing arbitrage algorithm')
@@ -85,7 +88,7 @@ def place_orders(context, amount, buying_price, selling_price, action):
     quote_currency = enter_exchange.quote_currency
     quote_currency_amount = enter_exchange.portfolio.cash
 
-    exit_balances = exit_exchange.get_balances()
+    exit_exchange.api.asyncioLoop.run_until_complete(get_exit_balances(exit_balances, exit_exchange))
     exit_currency = context.trading_pairs[
         context.selling_exchange].quote_currency
 

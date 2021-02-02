@@ -29,13 +29,21 @@ def get_exchange(exchange_name, quote_currency=None, must_authenticate=False,
             )
         )
 
+    #print("exchange name={}".format(exchange_name))
+    #print("exchange auth={}".format(exchange_auth))
+
+    #exchange = CCXT(
+    #    exchange_name=exchange_name,
+    #    key=exchange_auth['key'],
+    #    secret=exchange_auth['secret'],
+    #    password=exchange_auth['password'] if 'password'
+    #                                          in exchange_auth.keys() else '',
+    #    quote_currency=quote_currency,
+    #)
     exchange = CCXT(
         exchange_name=exchange_name,
-        key=exchange_auth['key'],
-        secret=exchange_auth['secret'],
-        password=exchange_auth['password'] if 'password'
-                                              in exchange_auth.keys() else '',
         quote_currency=quote_currency,
+        exchange_data=exchange_auth
     )
     exchange_cache[key] = exchange
 

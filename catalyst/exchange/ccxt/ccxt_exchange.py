@@ -99,6 +99,55 @@ class CCXT(Exchange):
         self.markets = None
         self._is_init = False
 
+    """
+    Additional __init__ function to allow for all the exchange data from the JSON auth data.
+    This will allow for other parameters beside just secret, key, and password.
+    Wanted to use this for a uid field for CEX exchange
+    """
+    def __init__(self, exchange_name,
+                 quote_currency, exchange_data):
+        log.debug(
+            'finding {} in CCXT exchanges:\n{}'.format(
+                exchange_name, ccxt.exchanges
+            )
+        )
+        try:
+            # Making instantiation as explicit as possible for code tracking.
+            if exchange_name in SUPPORTED_EXCHANGES:
+                exchange_attr = SUPPORTED_EXCHANGES[exchange_name]
+
+            else:
+                exchange_attr = getattr(ccxt, exchange_name)
+
+            self.api = exchange_attr(exchange_data)
+            self.api.enableRateLimit = True
+
+        except Exception:
+            raise ExchangeNotFoundError(exchange_name=exchange_name)
+
+        self._symbol_maps = [None, None]
+
+        self.name = exchange_name
+
+        self.quote_currency = quote_currency
+        self.transactions = defaultdict(list)
+
+        self.num_candles_limit = 2000
+        self.max_requests_per_minute = 60
+        self.low_balance_threshold = 0.1
+        self.request_cpt = dict()
+        self._common_symbols = dict()
+
+        # Operations with retry features
+        self.attempts = dict(
+            missing_order_attempts=5,
+            retry_sleeptime=5,
+        )
+
+        self.bundle = ExchangeBundle(self.name)
+        self.markets = None
+        self._is_init = False
+
     def init(self):
         if self._is_init:
             return
@@ -118,40 +167,17 @@ class CCXT(Exchange):
 
         if self.markets is None:
             self.api.asyncioLoop.run_until_complete(self.load_mkts_sym(self.markets, filename))
-            #self.load_mkts_sym(self.markets, filename)
-            #try:
-            #    markets_symbols = self.api.load_markets()
-            #    log.debug(
-            #        'fetching {} markets:\n{}'.format(
-            #            self.name, markets_symbols
-            #        )
-            #    )
-
-            #    self.markets = self.api.fetch_markets()
-            #    with open(filename, 'w+') as f:
-            #        json.dump(self.markets, f, indent=4)
-
-            #except (ExchangeError, NetworkError) as e:
-            #    log.warn(
-            #        'unable to fetch markets {}: {}'.format(
-            #            self.name, e
-            #        )
-            #    )
-            #    raise ExchangeRequestError(error=e)
 
         self.load_assets()
         self._is_init = True
 
     async def load_mkts_sym(self, symbols, filename):
-    #def load_mkts_sym(self, symbols, filename):
         try:
             symbols = await self.api.load_markets()
-            #symbols = self.api.load_markets()
             log.debug('fetching {} markets:\n{}'.format(
                       self.name, symbols))
 
             self.markets = await self.api.fetch_markets()
-            #mkts = self.api.fetch_markets()
             with open(filename, 'w+') as f:
                 json.dump(self.markets, f, indent=4)
 
@@ -492,13 +518,6 @@ class CCXT(Exchange):
         candles = dict()
         for index, asset in enumerate(assets):
             try:
-                #ohlcvs = self.api.fetch_ohlcv(
-                #    symbol=symbols[index],
-                #    timeframe=timeframe,
-                #    since=since,
-                #    limit=bar_count,
-                #    params={}
-                #)
                 self.api.asyncioLoop.run_until_complete(self.get_ohlcv(ohlcvs,
                                                                        symbols[index],
                                                                        timeframe,
@@ -892,8 +911,10 @@ class CCXT(Exchange):
         missing_order_id, missing_order = self._fetch_missing_order(
             dt_before=dt_before, symbol=symbol)
 
-    def _handle_request_timeout(self, dt_before, asset, amount, is_buy, style,
-                                prec_amount):
+    def _handle_request_timeout(self, dt_before, asset,
+                                amount, is_buy, style, prec_amount):
+    #async def _handle_request_timeout(self, dt_before, asset,
+                                      #amount, is_buy, style, prec_amount):
         """
         Check if an order was received during the timeout, if it appeared
         on the orders dict return it to the user.
@@ -909,8 +930,7 @@ class CCXT(Exchange):
         :return: missing_order: Order/ None
         """
         symbol = asset.asset_name.replace(' ', '')
-        #missing_order_id, missing_order = self._fetch_missing_order(
-            #dt_before=dt_before, symbol=symbol)
+        #missing_order_id, missing_order = await self._fetch_missing_order(dt_before=dt_before, symbol=symbol)
         self.api.asyncioLoop.run_until_complete(_run_fetch_missing_order(missing_order_id, missing_order, dt_before, symbol))
 
         if missing_order_id:
@@ -1273,7 +1293,14 @@ class CCXT(Exchange):
             )
             raise ExchangeRequestError(error=e)
 
-    async def tickers(self, assets, on_ticker_error='raise'):
+    async def get_fetch_ticker(self, results, symbol):
+        results[symbol] = await self.api.fetch_ticker(symbol)
+
+    async def get_fetch_tickers(self, results, symbols):
+        results = await self.api.fetch_tickers(symbols)
+
+    #async def tickers(self, assets, on_ticker_error='raise'):
+    def tickers(self, assets, on_ticker_error='raise'):
         """
         Retrieve current tick data for the given assets
 
@@ -1292,7 +1319,8 @@ class CCXT(Exchange):
                 for asset in assets:
                     symbol = self.get_symbol(asset)
                     log.debug('fetching single ticker: {}'.format(symbol))
-                    results[symbol] = await self.api.fetch_ticker(symbol=symbol)
+                    #results[symbol] = await self.api.fetch_ticker(symbol=symbol)
+                    self.api.asyncioLoop.run_until_complete(self.get_fetch_ticker(results, symbol))
 
             except (ExchangeError, NetworkError,) as e:
                 log.warn(
@@ -1305,8 +1333,10 @@ class CCXT(Exchange):
         elif len(assets) > 1:
             symbols = self.get_symbols(assets)
             try:
+                results = dict()
                 log.debug('fetching multiple tickers: {}'.format(symbols))
-                results = await self.api.fetch_tickers(symbols=symbols)
+                #results = await self.api.fetch_tickers(symbols=symbols)
+                self.api.asyncioLoop.run_until_complete(self.get_fetch_tickers(results, symbols))
 
             except (ExchangeError, NetworkError) as e:
                 log.warn(
